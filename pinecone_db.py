@@ -20,7 +20,7 @@ pc.create_index(
     name= 'Dawgfinder_DB',
     dimension=4096,
     metric="cosine",
-    spec=ServerlessSpec(cloud="aws", region="us-east-1"),
+    spec=ServerlessSpec(cloud="aws", region="us-east    -1"),
 )
 
 
