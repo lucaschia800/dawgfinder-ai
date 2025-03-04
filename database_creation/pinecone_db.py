@@ -2,10 +2,9 @@ import langchain
 from langchain_community.document_loaders import DataFrameLoader
 import json
 import pandas as pd
-from langchain_huggingface import HuggingFaceEmbeddings
 import getpass
 import os
-from pinecone import Pinecone, ServelessSpec
+from pinecone import Pinecone, ServerlessSpec
 from langchain_pinecone import PineconeVectorStore
 
 if not os.getenv("pinecone_API"):
@@ -17,10 +16,10 @@ pc = Pinecone(api_key=pinecone_api_key)
 
 
 pc.create_index(
-    name= 'Dawgfinder_DB',
+    name= 'course-description-db',
     dimension=4096,
     metric="cosine",
-    spec=ServerlessSpec(cloud="aws", region="us-east    -1"),
+    spec=ServerlessSpec(cloud="aws", region="us-east-1"),
 )
 
 
