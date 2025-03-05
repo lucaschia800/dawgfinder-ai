@@ -1,4 +1,3 @@
-import langchain
 from langchain_community.document_loaders import DataFrameLoader
 import pandas as pd
 import os
@@ -6,22 +5,14 @@ from pinecone import Pinecone
 from langchain_pinecone import PineconeVectorStore
 from langchain_openai import OpenAIEmbeddings 
 import openai 
-
 from CustomNLSQLRetriever import CustomNLSQLRetriever
 import os
-import llama_index
-
-
 from sqlalchemy import (
     create_engine
 )
-
 from llama_index.core import SQLDatabase
 from llama_index.llms.openai import OpenAI
-
-
 from sqlalchemy import text
-
 from llama_index.core import PromptTemplate
 
 
@@ -35,21 +26,20 @@ openai.api_key = api_key
 
 text_sql_model = OpenAI(temperature=0.1, model="gpt-3.5-turbo")
 
-engine_small = create_engine("sqlite:///databases/final_temp.db") #replace with actual
+engine_small = create_engine("sqlite:///databases/final_small.db") 
 
-engine_large = create_engine("sqlite:///databases/all_data.db") #replace with actual
+engine_large = create_engine("sqlite:///databases/final_large.db") 
 
-sql_database = SQLDatabase(engine_small, include_tables=["class_data"])
+sql_database = SQLDatabase(engine_small, include_tables=["all_classes"])
 
 prompt_str = (
     "Given an input question, first create a syntactically correct {dialect} query to run, then look at the results of the query and return the answer. "
-    "You can order the results by a relevant column to return the most interesting examples in the database.\n\n"
     "Never query for all the columns from a specific table, only ask for a few relevant columns given the question.\n\n"
     "Pay attention to use only the column names that you can see in the schema description. "
     "Be careful to not query for columns that do not exist. "
     "Pay attention to which column is in which table. "
     "Do not order by unless the query clearly suggests that you should."
-    "Also, qualify column names with the table name when needed. "
+    "Only filter rows if the question clearly suggests that you should. "
     "{schema}\n\n"
     "If querying for a specific dept_abbrev, pick from the following: {dept_abbrevs}\n"
     "course_id contains the course number as dtype INTEGER, e.g. 101."
@@ -70,30 +60,31 @@ class Query():
     database = engine_small  #this should be an engine object for small database
     database_final = engine_large #this is database of all attributes
     embedder = OpenAIEmbeddings(model="text-embedding-3-small")
-    sql_retriever = CustomNLSQLRetriever(sql_database, tables=["class_data"], return_raw=True, text_to_sql_prompt = prompt)
+    sql_retriever = CustomNLSQLRetriever(sql_database, tables=["all_classes"], return_raw=True, text_to_sql_prompt = prompt)
     abbrev_vector_store = PineconeVectorStore(pc.Index("department-abbrev-db"), embedding = embedder)
     descr_vector_store = PineconeVectorStore(pc.Index("course-description-db"), embedding = embedder)
 
     def __init__(self, query):
         
         """
-            Some of these parameters should just be class variables not instance 
+            query: type string
+            Initializes the query object with a text query, creates its embeddings, and queries two vector databases to return a list of 
+            tuples with (lanchaindoc, score) for course_descriptions and dept_abbrevs
         """
         self.query = query
         self.embedding = self.embedder.embed_query(self.query)
-        self.weights = {}
         self.abbrev_and_scores = self.abbrev_vector_store.similarity_search_by_vector_with_score(self.embedding, k = 3)
         self.descr_and_scores = self.descr_vector_store.similarity_search_by_vector_with_score(self.embedding, k = 3)
         #self.credit_and_scores =  self.credit_vector_score.similarity_search_by_vector_with_score(self.embedding, k = 3) #k = 3 is just a temporary assumption thaty this is the optimal value
 
         self.sql = None # type string
-        
-        
+            
 
 
     def text_to_sql(self):
         """
-            Returns the sql query from a text query
+            Calls CustomNLSQLRetriever to convert the query to SQL and retrieve the results
+            Returns a llamaindex object which contains the sql query and the results
 
         """
 
@@ -103,8 +94,8 @@ class Query():
     
     def run_sql(self):
         """
-            Pay attention to what this is returning as the return format is different from llama_index
-            NLSQLRetriever return format
+            Runs self.sql and returns a list of tuples which are the results
+
         """
         with self.database.connect() as con:
             cursor = con.execute(text(self.sql))
@@ -112,7 +103,7 @@ class Query():
             
         return rows_tuple
     
-    def grab_course_ids(self, returns, alternate = False):
+    def grab_course_uuids(self, returns, alternate = False):
         """
             Given a set of sql returns, returns the course ids as a list
 
@@ -120,56 +111,32 @@ class Query():
             Querying the database directly using sqlalchemy also returns the same list of tuples
                 Same deal with course_id?
         """
-        print('grabbing course ids')
+        print('grabbing course uuids')
 
-        # columns = self.sql.splitlines()[0].split(',')
-        # idx_course_id = None
-        # for idx, column in enumerate(columns):
-        #     print(column)
-        #     if 'course_id' in column.strip():
-        #         idx_course_id = idx
-        #         break
+        if not alternate:
+            columns = self.sql.splitlines()[0].split(',')
+            idx_course_uuid = None
+            for idx, column in enumerate(columns):
+                print(column)
+                if 'UUID' in column.strip():
+                    idx_course_uuid = idx
+                    break
 
-        # if idx_course_id is None:
-        #     sql_statements = self.sql.splitlines()
-        #     new_select_statement = sql_statements[0] + ', course_id'
-        #     sql_statements[0] = new_select_statement
-        #     self.sql = sql_statements  #watchout this turns into list need to turn back into string
+            if idx_course_uuid is None:
+                sql_statements = self.sql.splitlines()
+                new_select_statement = sql_statements[0] + ', UUID'
+                sql_statements[0] = new_select_statement
+                self.sql = '\n'.join(sql_statements)  #watchout this turns into list need to turn back into string
+                idx_course_uuid = -1
+                returns = self.run_sql()
 
-        if alternate:
-            course_ids = [row[-1] for row in returns]
-        else:
-            course_ids = [row[0] for row in returns] 
-        
-
-        return course_ids
-
-    def combine_course_id(self, returns):
-        print('combining course ids')
-
-        """Returns same list of tuples which is returns but with course_id and dept_abbrev concated as index 0"""
-
-        columns = self.sql.splitlines()[0].split(',')
-        idx_course_id = None
-        idx_dept_abbrev = None
-        for idx, column in enumerate(columns):
-            if 'course_id' in column:
-                idx_course_id = idx
-            elif 'department_abbrv' in column:
-                idx_dept_abbrev = idx
-
-
-        combined_returns = []
-        leftover_columns = [idx for idx in range(len(columns)) if idx != idx_course_id and idx != idx_dept_abbrev]
-        for sql_return in returns:
-            combined_id = sql_return[idx_dept_abbrev] + str(sql_return[idx_course_id])
+            course_uuids = [row[idx_course_uuid] for row in returns]
             
-            # Create a new tuple with the combined ID as first element, followed by the remaining elements
-            combined_row = (combined_id,) + tuple(sql_return[idx] for idx in leftover_columns)
-            combined_returns.append(combined_row)
-
-
-        return combined_returns #list of tuples where index 0 is full course_id ie dept_abbrev + course_id
+            print('Course uuids:')
+            print(course_uuids)
+        else:
+            course_uuids = [row[-1] for row in returns]
+        return course_uuids
 
 
     def sort_relevance(self, returns):
@@ -181,7 +148,7 @@ class Query():
             Assuming high course description alignment should we prioritize over ORDER BY?
             If course description cosine similarity is very high then maybe we need to take this into consideration
         """
-        id_and_rank = {}
+        uuid_and_rank = {}
         reordered_returns = []
 
         for line in self.sql.split('\n'):
@@ -190,54 +157,60 @@ class Query():
                 where_line = line_curr
                 break
 
-        #set up order tier between description, abbrev, and credit_type
-        if 'description' in self.sql.lower() or self.descr_and_scores[0][1] > 0.88:    #Score threshold which may need to be tuned.
-            print('description')
-            returns = self.combine_course_id(returns) #list of tuples still
-            id_and_rank = {row[0]: descr_score[1] for row, descr_score in zip(returns, self.descr_and_scores) if descr_score[0].metadata['course_id'] in row[0]}
-            reordered_returns_list = sorted(id_and_rank, key = lambda x: id_and_rank[x], reverse = True)
-            print(id_and_rank)
+        if 'ORDER BY' in self.sql:
+            print('ORDER BY')
+            reordered_uuid_list = self.grab_course_uuids((returns))
 
-        elif "ORDER BY" in self.sql: #the order by problem is that the sql returns will often contain an order even when user doesn't specify a query which should be ordered.
-            #i think we can solve this by saying only order by certain columns
-            #this also becomes redundant and can be grouped into else case
-            print('order by')
-            reordered_returns_list = self.grab_course_ids(self.combine_course_id(returns))
-            
+        #set up order tier between description, abbrev, and credit_type
+        elif 'description' in self.query or self.descr_and_scores[0][1] > 0.88:    #Score threshold which may need to be tuned.
+            print('description')
+            uuids = self.grab_course_uuids(returns) #list of tuples still
+            for course_descr in self.descr_and_scores: #start by adding all top course matches to dictionary, the number of top course matches is determined by k 
+                uuid_and_rank[course_descr[0].metadata['UUID']] = course_descr[1]
+            for position, course in enumerate(uuids):
+                if course not in uuid_and_rank:
+                    uuid_and_rank[course] = 0.6 - (0.1 * position) 
+            reordered_uuid_list = sorted(uuid_and_rank, key = lambda x: uuid_and_rank[x], reverse = True)
+            print(uuid_and_rank)
 
         #Set relevance score based on order tier
         elif "department_abbrev" in where_line or "credit_type" in where_line: #if neither are in sql then we sort by description,   this needs to be only in the WHERE statement
             print('abbrv and credit')
             order = (self.abbrev_and_scores, self.descr_and_scores)
-            #order = order + (self.descr_and_scores,)
-            returns = self.combine_course_id(returns) # list of tuples
+            uuids = self.grab_course_uuids(returns) # list of tuples
             for position, weight in enumerate(order):
-                for id, score in zip(weight[position][0].metadata['course_id'], weight[position][1]):
+                for id, score in zip(weight[position][0].metadata['UUID'], weight[position][1]): #need to reembed department abbrev to be contain metadata cat UUID
                     for row in returns: #assumes lines are split by \n
                         if id in row[0]:
-                            id_and_rank[row[0]] = (10 ** abs(position - 3)) * score
-            reordered_returns_list = sorted(id_and_rank, key = lambda x: id_and_rank[x], reverse = True)
+                            uuid_and_rank[row[0]] = (10 ** abs(position - 2)) * score
+            reordered_uuid_list = sorted(uuid_and_rank, key = lambda x: uuid_and_rank[x], reverse = True)
         else:
             print('else')
-            reordered_returns_list = self.grab_course_ids(self.combine_course_id(returns))
+            reordered_uuid_list = self.grab_course_uuids((returns))
             
-                #this is a list of course_ids ordered by relevance
+        #this is a list of UUIDs ordered by relevance
         print('reordered returns list:')
-        print(reordered_returns_list)
+        print(reordered_uuid_list)
           #this is a list of course_ids in order of relevance
 
-        final_returns_unsorted = self.sql_large_db(reordered_returns_list, True) #this is a list of tuples
-        final_return_course_ids = self.grab_course_ids(final_returns_unsorted)
+        final_returns_unsorted = list(self.sql_large_db(reordered_uuid_list)) #this is a list of tuples
+        final_return_uuids = self.grab_course_uuids(final_returns_unsorted, True)
 
         print('final returns unsorted')
-        print(final_returns_unsorted)
+        # for row in final_returns_unsorted: 
+        #     print(row)
 
         print('final return course ids')
-        print(final_return_course_ids)
+        # print(final_return_course_ids)
 
-        for course_id in reordered_returns_list:
-            for row_id, row in zip(final_return_course_ids, final_returns_unsorted):
-                if course_id in ''.join(row_id.split()):
+        print('Description scores')
+        print(self.descr_and_scores)
+
+        for course_uuid in reordered_uuid_list:
+
+            for row_uuid, row in zip(final_return_uuids, final_returns_unsorted):
+             
+                if course_uuid == row_uuid:
                     reordered_returns.append(row)
 
         print('reordered returns')
@@ -245,18 +218,18 @@ class Query():
         
 
         return reordered_returns
+    
 
-    def sql_large_db(self, course_ids, final):
+    def sql_large_db(self, course_ids):
         """
             Given a list of course_ids creates the final sql statement to grab everything from final database
             
         """
         formatted_ids = ", ".join(f"'{course_id}'" for course_id in course_ids)
 
-        if final:
-            sql_final = f"SELECT * FROM courses WHERE 'Clean_Course_Code' IN ({formatted_ids})"
-        else:
-            sql_final = f"SELECT 'Clean_Course_Code' FROM class_data WHERE 'Clean_Course_Code' IN ({formatted_ids})"
+
+        sql_final = f"SELECT * FROM all_classes WHERE UUID IN ({formatted_ids})"
+
         #with self.database_final.connect() as con:
         print(sql_final)
         with self.database_final.connect() as con:
@@ -267,18 +240,16 @@ class Query():
 
     
 
-
     def widen_search(self):
         """Reruns the query with a wider search by dropping where clauses until results are found
             if we drop the last and then theres no point in search  
         """
-        print('widen search')
+        print('Widening Search')
         
-        # Initialize where_clause
         where_clause = None
         line_num = None
         
-        # Find the WHERE clause
+      
         for i, line in enumerate(self.sql.splitlines()):
             if 'WHERE' in line:
                 where_clause = line
@@ -302,14 +273,14 @@ class Query():
         
         returns = self.run_sql()
         
-        # If we got results, sort and return them
+       
         if returns and len(returns) > 0:
             return self.sort_relevance(returns)
         
-        # If no results and we can still widen, try again (limit to 5 attempts)
-        iterations = 1  # We've already done one iteration
-        while len(returns) == 0 and iterations < 5 and where_clause.count('AND') < 2:
-            # Try to widen again
+        # If no results and we can still widen and try again (limit to 5 attempts)
+        iterations = 1 
+        while len(returns) == 0 and iterations < 5 and where_clause.count('AND') > 2:
+            
             wider_results = self.widen_search()
             if wider_results is not None:
                 return wider_results
@@ -324,8 +295,8 @@ class Query():
 
 
     def find_relevant_courses(self):
-        """ Takes in weight dictionaries and uses a mix of dynamic query weighting and predifined weights
-        to create a viable probability distribution for how to rank relevant queries
+        """
+        finds the relevant courses for a class, returns list of tuples where each tuple is a course
 
         """
 
