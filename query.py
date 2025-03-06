@@ -139,21 +139,24 @@ class Query():
         lines = self.sql.splitlines()
         where_clause = []
         capture = False
+        last_where_idx = None
+        first_where_idx = None
 
         for idx, line in enumerate(lines):
             stripped_line = line.strip()
 
             if stripped_line.upper().startswith('WHERE'):
                 capture = True
+                first_where_idx = idx
                 where_clause.append(stripped_line)
             elif capture and stripped_line.upper().startswith('AND'):
                 where_clause.append(stripped_line)
     
             elif capture:
-                where_idx = idx - 1
+                last_where_idx = idx - 1
                 break
 
-        return '\n'.join(where_clause), where_idx
+        return '\n'.join(where_clause), first_where_idx, last_where_idx
     
 
     def grab_course_uuids(self, returns, alternate = False):
@@ -204,7 +207,7 @@ class Query():
         uuid_and_rank = {}
         reordered_returns = []
 
-        where_clause, _ = self.find_where_clause()
+        where_clause, _, _ = self.find_where_clause()
 
         if 'ORDER BY' in self.sql:
             print('ORDER BY')
@@ -297,7 +300,7 @@ class Query():
 
     
 
-    def widen_search(self, iteration = 0, max_iterations = 5):
+    def widen_search(self, iteration = 0, max_iterations = 5, last_where_idx = None, first_where_idx = None):
         """Reruns the query with a wider search by dropping where clauses until results are found
             if we drop the last and then theres no point in search  
         """
@@ -305,23 +308,37 @@ class Query():
         
         if iteration < max_iterations:
             where_clause = None #where line can run onto multiple lines if query is long
-            line_num = None
-        
-      
-            where_clause, where_idx = self.find_where_clause()
+
+
+            if last_where_idx is None:
+                where_clause, first_where_idx, last_where_idx = self.find_where_clause()
+
+            if last_where_idx is None:
+            # The WHERE clause might be at the end of the SQL - use the length of split_sql minus 1
+                split_sql = self.sql.splitlines()
+                last_where_idx = len(split_sql) - 1
+    
+
+
         
         # If no WHERE clause found or no AND operators to remove, exit
-            if not where_clause or where_clause.count(' AND ') < 2:
+            if not where_clause or where_clause.count('AND ') < 2:
                 print('No more where clauses to drop')
                 return None
         
         
-            last_and_index = where_clause.rindex(' AND ')
-            new_clause = where_clause[:last_and_index]
+
         
             # Update the SQL query
             split_sql = self.sql.splitlines()
-            split_sql[line_num] = new_clause
+            if not split_sql[last_where_idx].startswith('WHERE') or not split_sql[last_where_idx].startswith('AND'):
+                last_where_idx -= 1
+
+            last_and_index = where_clause.rindex('AND ')
+            new_clause = where_clause[:last_and_index] 
+            new_clause_split = new_clause.splitlines()
+
+            split_sql[first_where_idx : last_where_idx + 1] = new_clause_split
             self.sql = "\n".join(split_sql)
         
         
