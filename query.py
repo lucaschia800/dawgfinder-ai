@@ -97,12 +97,65 @@ class Query():
             Runs self.sql and returns a list of tuples which are the results
 
         """
+        print(self.sql)
         with self.database.connect() as con:
             cursor = con.execute(text(self.sql))
             rows_tuple = cursor.fetchall()
             
         return rows_tuple
     
+    def grab_uuids_and_abbrevs(self, returns):
+        columns = self.sql.splitlines()[0].split(',')
+        has_course_uuid = any('UUID' in column.strip() for column in columns)
+        has_dept_abbrv = any('department_abbrv' in column.strip() for column in columns)
+        
+        if not has_course_uuid  or not has_dept_abbrv:
+            sql_statements = self.sql.splitlines()
+
+            new_select_statement = sql_statements[0]
+    
+            if not has_course_uuid:
+                new_select_statement += ', UUID'
+            if not has_dept_abbrv:
+                new_select_statement += ', department_abbrv'
+
+            sql_statements[0] = new_select_statement
+            self.sql = '\n'.join(sql_statements)  #watchout this turns into list need to turn back into string
+
+            returns = self.run_sql()
+
+        columns = self.sql.splitlines()[0].split(',')
+        for idx, column in enumerate(columns):
+            if 'UUID' in column.strip():
+                idx_course_uuid = idx
+            elif 'department_abbrv' in column.strip():
+                idx_dept_abbrv = idx
+        
+        uuids_and_abbrevs = [(row[idx_course_uuid], row[idx_dept_abbrv]) for row in returns]
+
+        return uuids_and_abbrevs
+
+    def find_where_clause(self):
+        lines = self.sql.splitlines()
+        where_clause = []
+        capture = False
+
+        for idx, line in enumerate(lines):
+            stripped_line = line.strip()
+
+            if stripped_line.upper().startswith('WHERE'):
+                capture = True
+                where_clause.append(stripped_line)
+            elif capture and stripped_line.upper().startswith('AND'):
+                where_clause.append(stripped_line)
+    
+            elif capture:
+                where_idx = idx - 1
+                break
+
+        return '\n'.join(where_clause), where_idx
+    
+
     def grab_course_uuids(self, returns, alternate = False):
         """
             Given a set of sql returns, returns the course ids as a list
@@ -151,11 +204,7 @@ class Query():
         uuid_and_rank = {}
         reordered_returns = []
 
-        for line in self.sql.split('\n'):
-            line_curr = line.strip()
-            if line_curr.upper().startswith('WHERE'):
-                where_line = line_curr
-                break
+        where_clause, _ = self.find_where_clause()
 
         if 'ORDER BY' in self.sql:
             print('ORDER BY')
@@ -174,15 +223,23 @@ class Query():
             print(uuid_and_rank)
 
         #Set relevance score based on order tier
-        elif "department_abbrev" in where_line or "credit_type" in where_line: #if neither are in sql then we sort by description,   this needs to be only in the WHERE statement
+        elif "department_abbrv" in where_clause or "credit_type" in where_clause: #if neither are in sql then we sort by description,  
             print('abbrv and credit')
             order = (self.abbrev_and_scores, self.descr_and_scores)
             uuids = self.grab_course_uuids(returns) # list of tuples
             for position, weight in enumerate(order):
-                for id, score in zip(weight[position][0].metadata['UUID'], weight[position][1]): #need to reembed department abbrev to be contain metadata cat UUID
-                    for row in returns: #assumes lines are split by \n
-                        if id in row[0]:
-                            uuid_and_rank[row[0]] = (10 ** abs(position - 2)) * score
+                if position == 0:
+                    for dept_doc in weight: #need to reembed department abbrev to be contain metadata cat UUID
+                        for row in returns: 
+                            if row[1] in dept_doc[0].page_content:  #if 
+                                uuid_and_rank[row[0]] = (10 ** abs(position - 2)) * dept_doc[1]
+                else:
+                    for course_descr in weight:
+                        for row in returns:
+                            if row[0] == course_descr[0].metadata['UUID']:
+                                curr_score = uuid_and_rank.get(row[0], 0)
+                                uuid_and_rank[row[0]] = curr_score + (10 ** abs(position - 2)) * course_descr[1]
+                                
             reordered_uuid_list = sorted(uuid_and_rank, key = lambda x: uuid_and_rank[x], reverse = True)
         else:
             print('else')
@@ -240,63 +297,51 @@ class Query():
 
     
 
-    def widen_search(self):
+    def widen_search(self, iteration = 0, max_iterations = 5):
         """Reruns the query with a wider search by dropping where clauses until results are found
             if we drop the last and then theres no point in search  
         """
         print('Widening Search')
         
-        where_clause = None
-        line_num = None
+        if iteration < max_iterations:
+            where_clause = None #where line can run onto multiple lines if query is long
+            line_num = None
         
       
-        for i, line in enumerate(self.sql.splitlines()):
-            if 'WHERE' in line:
-                where_clause = line
-                line_num = i
-                break
+            where_clause, where_idx = self.find_where_clause()
         
         # If no WHERE clause found or no AND operators to remove, exit
-        if not where_clause or where_clause.count('AND') < 2:
-            print('No more where clauses to drop')
-            return None
+            if not where_clause or where_clause.count(' AND ') < 2:
+                print('No more where clauses to drop')
+                return None
         
         
-        last_and_index = where_clause.rindex('AND')
-        new_clause = where_clause[:last_and_index]
+            last_and_index = where_clause.rindex(' AND ')
+            new_clause = where_clause[:last_and_index]
         
-        # Update the SQL query
-        split_sql = self.sql.splitlines()
-        split_sql[line_num] = new_clause
-        self.sql = "\n".join(split_sql)
+            # Update the SQL query
+            split_sql = self.sql.splitlines()
+            split_sql[line_num] = new_clause
+            self.sql = "\n".join(split_sql)
         
         
-        returns = self.run_sql()
+            returns = self.run_sql()
         
-       
-        if returns and len(returns) > 0:
-            return self.sort_relevance(returns)
+       #might want to check if returns is greater than prior returns as right now widen search could result in no more search being provided given that a valid search occurred but it 
+       #didnt expand resutls
+            if returns and len(returns) > 0: 
+                return self.sort_relevance(returns)
         
         # If no results and we can still widen and try again (limit to 5 attempts)
-        iterations = 1 
-        while len(returns) == 0 and iterations < 5 and where_clause.count('AND') > 2:
-            
-            wider_results = self.widen_search()
-            if wider_results is not None:
-                return wider_results
-            
-            iterations += 1
+            return self.widen_search(iteration + 1)
         
-        if iterations >= 5:
-            print('No results found, try being less specific')
-            return None
-        
+        print('No results found')
         return None
 
 
     def find_relevant_courses(self):
         """
-        finds the relevant courses for a class, returns list of tuples where each tuple is a course
+        finds the relevant courses for a class, returns list of tuples where each tuple is a course assuming that returns are from NLSQLRetriever
 
         """
 
