@@ -132,6 +132,8 @@ class Query():
                 idx_dept_abbrv = idx
         
         uuids_and_abbrevs = [(row[idx_course_uuid], row[idx_dept_abbrv]) for row in returns]
+        print('UUIDs and abbrevs:')
+        print(uuids_and_abbrevs)
 
         return uuids_and_abbrevs
 
@@ -156,6 +158,9 @@ class Query():
                 last_where_idx = idx - 1
                 break
 
+
+        print('Where clause:')
+        print('\n'.join(where_clause))
         return '\n'.join(where_clause), first_where_idx, last_where_idx
     
 
@@ -229,11 +234,11 @@ class Query():
         elif "department_abbrv" in where_clause or "credit_type" in where_clause: #if neither are in sql then we sort by description,  
             print('abbrv and credit')
             order = (self.abbrev_and_scores, self.descr_and_scores)
-            uuids = self.grab_course_uuids(returns) # list of tuples
+            uuids_abbrvs = self.grab_uuids_and_abbrevs(returns) # list of tuples
             for position, weight in enumerate(order):
                 if position == 0:
                     for dept_doc in weight: #need to reembed department abbrev to be contain metadata cat UUID
-                        for row in returns: 
+                        for row in uuids_abbrvs: 
                             if row[1] in dept_doc[0].page_content:  #if 
                                 uuid_and_rank[row[0]] = (10 ** abs(position - 2)) * dept_doc[1]
                 else:
@@ -331,8 +336,8 @@ class Query():
         
             # Update the SQL query
             split_sql = self.sql.splitlines()
-            if not split_sql[last_where_idx].startswith('WHERE') or not split_sql[last_where_idx].startswith('AND'):
-                last_where_idx -= 1
+            # if not split_sql[last_where_idx].startswith('WHERE') or not split_sql[last_where_idx].startswith('AND'):
+            #     last_where_idx -= 1
 
             last_and_index = where_clause.rindex('AND ')
             new_clause = where_clause[:last_and_index] 
