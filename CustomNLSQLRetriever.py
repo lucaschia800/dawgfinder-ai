@@ -24,10 +24,11 @@ class CustomNLSQLRetriever(NLSQLRetriever):
         self._current_abbrev_scores = None
         self._current_credit_scores = None
 
-    def retrieve(self, query_str, abbrev_and_scores=None, credit_and_scores=None):
+    def retrieve(self, query_str, abbrev_and_scores=None, credit_and_scores=None, professor_names = None):
         """Store context and call parent retrieve."""
         self._current_abbrev_scores = abbrev_and_scores
         self._current_credit_scores = credit_and_scores
+        self._professor_names = professor_names
         return super().retrieve(query_str)
     
     def _retrieve(self, query_bundle):
@@ -58,6 +59,11 @@ class CustomNLSQLRetriever(NLSQLRetriever):
             abbrev_and_scores[abbrev] = entry[1]
             abbrevs = ", ".join(abbrev_and_scores.keys())
 
+        professor_list = []
+        for entry in self._professor_names:
+            professor_list.append(entry[0].page_content)
+            professors = ", ".join(professor_list)
+
         # Use the stored context in your logic if needed
         # ...
 
@@ -67,7 +73,9 @@ class CustomNLSQLRetriever(NLSQLRetriever):
             query_str=query_bundle.query_str,
             schema=table_desc_str,
             dialect=self._sql_database.dialect,
-            dept_abbrevs = abbrevs
+            dept_abbrevs = abbrevs,
+            professor_names = professors
+
         )
 
         sql_query_str = self._sql_parser.parse_response_to_sql(
