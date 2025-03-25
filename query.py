@@ -15,76 +15,86 @@ from llama_index.llms.openai import OpenAI
 from sqlalchemy import text
 from llama_index.core import PromptTemplate
 
-
+DATABASE_URL = os.getenv("DATABASE_URL_NEW", "")
+if DATABASE_URL.startswith("postgres://"):
+    DATABASE_URL = DATABASE_URL.replace("postgres://", "postgresql://", 1)
 
 
 pinecone_api_key = os.environ.get("PINECONE_API")
 
-pc = Pinecone(api_key=pinecone_api_key)
 
 api_key = os.getenv("OPENAI_API_KEY")
 openai.api_key = api_key
 
-text_sql_model = OpenAI(temperature=0.1, model="gpt-4o")
-
-engine_small = create_engine("sqlite:///databases/final_small.db") 
-
-engine_large = create_engine('sqlite:///databases/final_large.db') 
-
-sql_database = SQLDatabase(engine_small, include_tables=["all_classes"])
-
-prompt_str = (
-    """You are a SQL query generator and interpreter for finding relevant college classes. Your task has two steps:
-1. Carefully analyze the input question
-2. Create a precise, syntactically correct {dialect} query that addresses the question
-
-IMPORTANT SQL QUERY RULES:
-- Select ONLY specific columns explicitly mentioned or clearly needed by the question, NEVER use *
-- Use ONLY column names visible in the schema description below
-- NEVER query for columns that don't exist in the schema
-- Use filtering (WHERE clause) ONLY when the question clearly indicates specific criteria
-- Apply ORDER BY ONLY when the question clearly suggests sorting or ranking and never ORDER BY course_id
-- Make sure not to use \ unless it is for creating a new line like '\n'
-- When filtering by credit_type, ALWAYS use the LIKE operator
-- When querying for a specific dept_abbrev, ONLY use values from this list: {dept_abbrevs}
-- If the question indicates to search for a professor ONLY use names from this list: {professor_names}
-- Remember that course_id contains course numbers as INTEGER type (e.g., 101)
-- meeting_days contains values M, T, W, Th, F. If multiple days, they appear like: 'TTh'
-- quarter_offered contains only these values: 'Spring 2025' or 'Summer 2025'
-- course_id values range ONLY between 100 and 700
-- credit_type contains TEXT values with ONLY these specific options:
-  * 'SSc': Social Sciences
-  * 'DIV': Diversity
-  * 'A&H': Arts and Humanities
-  * 'NSc': Natural Sciences
-  * 'RSN': Reasoning
-  * credit_type can contain multiple types in which case it appears like: "SSc, DIV"
-
-Schema Description:
-{schema}
-
-Question: {query_str}
-
-Step 1: Let me identify the exact information needed and relevant columns.
-Step 2: SQLQuery: """
-)
-
-prompt = PromptTemplate(prompt_str)
 
 
-
+embedder = OpenAIEmbeddings(model="text-embedding-3-small")
 class Query():
     """
     This class represents a query and the its management lifecycle to find relevant courses
 
     """
+
+
+    pc = Pinecone(api_key=pinecone_api_key)
+
+
+    text_sql_model = OpenAI(temperature=0.1, model="gpt-4o")
+
+    
+    engine_small = create_engine("sqlite:///databases/final_small_undergrad.db") 
+
+    engine_large = create_engine("sqlite:///databases/final_large.db") 
+
+    sql_database = SQLDatabase(engine_small, include_tables=["all_classes"])
+
+    prompt_str = (
+        """You are a SQL query generator and interpreter for finding relevant college classes. Your task has two steps:
+    1. Carefully analyze the input question
+    2. Create a precise, syntactically correct {dialect} query that addresses the question
+
+    IMPORTANT SQL QUERY RULES:
+    - Select ONLY specific columns explicitly mentioned or clearly needed by the question, NEVER use *
+    - Use ONLY column names visible in the schema description below
+    - NEVER query for columns that don't exist in the schema
+    - Use filtering (WHERE clause) ONLY when the question clearly indicates specific criteria
+    - Typically try to use ORDER BY if it makes sense for the question but never ORDER BY column course_id
+    - Make sure not to use \ unless it is for creating a new line like '\n'
+    - When filtering by credit_type, ALWAYS use the LIKE operator
+    - When querying for a specific dept_abbrev, ONLY use values from this list: {dept_abbrevs}
+    - If the question indicates to search for a professor ONLY use names from this list: {professor_names}
+    - Remember that course_id contains course numbers as INTEGER type (e.g., 101)
+    - meeting_days contains values M, T, W, Th, F. If multiple days, they appear like: 'TTh'
+    - quarter_offered contains only these values: 'Spring 2025' or 'Summer 2025'
+    - course_id values range ONLY between 100 and 700
+    - Remember the higher the gpa the easier the class and same with rate my professor score.
+    - if using ORDER BY, always filter out NA values for the column you are ordering by
+    - credit_type contains TEXT values with ONLY these specific options:
+    * 'SSc': Social Sciences
+    * 'DIV': Diversity
+    * 'A&H': Arts and Humanities
+    * 'NSc': Natural Sciences
+    * 'RSN': Reasoning
+    * 'C' : English Composition/Writing
+    * credit_type can contain multiple types in which case it appears like: "SSc, C"
+
+    Schema Description:
+    {schema}
+
+    Question: {query_str}
+
+    Step 1: Let me identify the exact information needed and relevant columns.
+    Step 2: SQLQuery: """
+    )
+
+    prompt = PromptTemplate(prompt_str)
     database = engine_small  #this should be an engine object for small database
     database_final = engine_large #this is database of all attributes
-    embedder = OpenAIEmbeddings(model="text-embedding-3-small")
     sql_retriever = CustomNLSQLRetriever(sql_database, tables=["all_classes"], return_raw=True, text_to_sql_prompt = prompt)
     abbrev_vector_store = PineconeVectorStore(pc.Index("department-abbrev-db"), embedding = embedder)
     descr_vector_store = PineconeVectorStore(pc.Index("course-description-db"), embedding = embedder)
     professors_vector_store = PineconeVectorStore(pc.Index("teacher-names"), embedding = embedder)
+    embedder = OpenAIEmbeddings(model="text-embedding-3-small")
 
     def __init__(self, query):
         
@@ -243,20 +253,29 @@ class Query():
         #     reordered_uuid_list = self.grab_course_uuids((returns))
 
         #set up order tier between description, abbrev, and credit_type
-        if 'description' in self.query or self.descr_and_scores[0][1] > 0.88 or 'about' in self.query:    #Score threshold which may need to be tuned.
+        if self.title_and_scores > 0.8: #threshold which must be tested
+            print('title')
+            #Now we need to grab the uuids form the top title returns
+            reordered_uuid_list = 
+            if returns > 0:
+                uuids_returns = self.grab_course_uuids(returns)
+                for uuid in uuids_returns:
+                    reordered_uuid_list.append(uuid)
+        elif 'description' in self.query or self.descr_and_scores[0][1] > 0.88 or 'about' in self.query:    #Score threshold which may need to be tuned.
             print('description')
             if len(returns) > 0:
                 uuids = self.grab_course_uuids(returns) #list of tuples still
             else:
                 uuids = []
-            for course_descr in self.descr_and_scores: #start by adding all top course matches to dictionary, the number of top course matches is determined by k 
+            for course_descr in self.descr_and_scores: #start byall adding all top course matches to dictionary, the number of top course matches is determined by k 
                 uuid_and_rank[course_descr[0].metadata['UUID']] = course_descr[1] #could be problem here
             for position, course in enumerate(uuids):
                 if course not in uuid_and_rank:
                     uuid_and_rank[course] = 0.6 - (0.1 * position) 
             reordered_uuid_list = sorted(uuid_and_rank, key = lambda x: uuid_and_rank[x], reverse = True)
             print(uuid_and_rank)
-
+        elif "ORDER BY" in self.sql:
+            reordered_uuid_list = self.grab_course_uuids((returns))
         #Set relevance score based on order tier
         elif "department_abbrv" in where_clause or "credit_type" in where_clause: #if neither are in sql then we sort by description,  
             print('abbrv and credit')
@@ -294,7 +313,7 @@ class Query():
           #this is a list of course_ids in order of relevance
         
 
-        #this code block is bugging out and sometimes is failing to grab the final returns
+
 
         final_returns_unsorted = list(self.sql_large_db(reordered_uuid_list)) #this is a list of tuples
         final_return_uuids = self.grab_course_uuids(final_returns_unsorted, True)
