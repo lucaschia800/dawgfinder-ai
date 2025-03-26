@@ -94,6 +94,7 @@ class Query():
     abbrev_vector_store = PineconeVectorStore(pc.Index("department-abbrev-db"), embedding = embedder)
     descr_vector_store = PineconeVectorStore(pc.Index("course-description-db"), embedding = embedder)
     professors_vector_store = PineconeVectorStore(pc.Index("teacher-names"), embedding = embedder)
+    title_vector_store = PineconeVectorStore(pc.Index("course-title-db"), embedding = embedder)
     embedder = OpenAIEmbeddings(model="text-embedding-3-small")
 
     def __init__(self, query):
@@ -108,6 +109,7 @@ class Query():
         self.abbrev_and_scores = self.abbrev_vector_store.similarity_search_by_vector_with_score(self.embedding, k = 3)
         self.descr_and_scores = self.descr_vector_store.similarity_search_by_vector_with_score(self.embedding, k = 25)
         self.professors_and_scores = self.professors_vector_store.similarity_search_by_vector_with_score(self.embedding, k = 3)
+        self.title_and_scores = self.title_vector_store.similarity_search_by_vector_with_score(self.embedding, k = 1)
 
         self.sql = None # type string
             
@@ -253,15 +255,11 @@ class Query():
         #     reordered_uuid_list = self.grab_course_uuids((returns))
 
         #set up order tier between description, abbrev, and credit_type
-        if self.title_and_scores > 0.8: #threshold which must be tested
+        if self.title_and_scores[0][1] > 0.87: #threshold which must be tested
             print('title')
             #Now we need to grab the uuids form the top title returns
-            reordered_uuid_list = 
-            if returns > 0:
-                uuids_returns = self.grab_course_uuids(returns)
-                for uuid in uuids_returns:
-                    reordered_uuid_list.append(uuid)
-        elif 'description' in self.query or self.descr_and_scores[0][1] > 0.88 or 'about' in self.query:    #Score threshold which may need to be tuned.
+            reordered_uuid_list = [self.title_and_scores[0][0].metadata['UUID']]
+        elif 'description' in self.query or self.descr_and_scores[0][1] > 0.88 or 'about' in self.query or len(returns) < 1:    #Score threshold which may need to be tuned.
             print('description')
             if len(returns) > 0:
                 uuids = self.grab_course_uuids(returns) #list of tuples still
